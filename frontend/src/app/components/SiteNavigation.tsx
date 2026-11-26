@@ -2,9 +2,25 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 
 export default function SiteNavigation() {
   const pathname = usePathname();
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  useEffect(() => {
+    function checkAuth() {
+      const token = localStorage.getItem("sarvam_token");
+      setIsLoggedIn(!!token);
+    }
+    checkAuth();
+    window.addEventListener("storage", checkAuth);
+    window.addEventListener("sarvam:auth-change", checkAuth);
+    return () => {
+      window.removeEventListener("storage", checkAuth);
+      window.removeEventListener("sarvam:auth-change", checkAuth);
+    };
+  }, []);
 
   function openChat() {
     window.dispatchEvent(new Event("sarvam:open-chat"));
@@ -59,6 +75,18 @@ export default function SiteNavigation() {
           <path d="M8 11.5h.01M12 11.5h.01M16 11.5h.01" />
         </svg>
       </button>
+      <Link
+        className={`site-nav-button${pathname === "/login" || pathname === "/register" || pathname === "/profile" ? " is-active" : ""}`}
+        href={isLoggedIn ? "/profile" : "/login"}
+        aria-label={isLoggedIn ? "User profile" : "Login"}
+        aria-current={pathname === "/login" || pathname === "/register" || pathname === "/profile" ? "page" : undefined}
+        title={isLoggedIn ? "User profile" : "Login"}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+          <circle cx="12" cy="7" r="4" />
+        </svg>
+      </Link>
     </nav>
   );
 }

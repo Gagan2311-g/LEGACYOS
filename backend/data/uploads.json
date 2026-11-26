@@ -1,5 +1,17 @@
 [
   {
+    "id": "fb140816-8ab3-4879-b94d-4804cc8419b5",
+    "district_id": "bengaluru-rural",
+    "collection_id": "bengaluru-division",
+    "contributor": "gagan",
+    "caption": "nice place",
+    "filename": "download.jpg",
+    "media_type": "image",
+    "url": "/media/fb140816-8ab3-4879-b94d-4804cc8419b5.jpg",
+    "created_at": "2026-11-14T04:17:43.213311+00:00",
+    "status": "published"
+  },
+  {
     "id": "85c329e4-04af-4c02-9b98-cd5f9bbc20bc",
     "district_id": "udupi",
     "contributor": "gagan",

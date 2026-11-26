@@ -54,6 +54,13 @@ District-specific questions only use records assigned to or explicitly
 mentioning that district. For example, the Shivamogga food answer is sourced
 from the Karnataka Tourism guide to Appe Midi in Sagar; broader Kodava food
 records are reserved for broader regional questions.
+Questions comparing regions retrieve evidence from each named region, and a
+district mentioned in a broader query is prioritized without hiding the wider
+regional context. A location in the current question takes precedence over the
+page context, and follow-up questions stay attached to the sources cited in the
+previous answer. When verified records do not establish a requested year or
+current statistic, the assistant says so instead of asking the answer model to
+fill the gap.
 
 | Purpose | Route |
 |---|---|

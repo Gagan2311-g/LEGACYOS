@@ -11,6 +11,7 @@ from fastapi import (
     Header,
     Request,
 )
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
@@ -26,18 +27,12 @@ import re
 import secrets
 import uuid
 import sqlite3
-<<<<<<< HEAD
-from app.knowledge_base import router as knowledge_router
-
-=======
 logger = logging.getLogger(__name__)
->>>>>>> origin/main
 app = FastAPI(
     title="LEGACYOS API",
     description="Human Knowledge Preservation System",
     version="1.0.0"
 )
-app.include_router(knowledge_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -272,6 +267,27 @@ def initialize_database():
         "CREATE INDEX IF NOT EXISTS idx_place_media_place_created "
         "ON place_media(place_id, created_at)"
     )
+
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            reset_token TEXT,
+            reset_token_expires TEXT
+        )
+    """)
+
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        )
+    """)
 
     connection.commit()
     connection.close()
@@ -1886,6 +1902,214 @@ async def upload_place_media(
     ).fetchone()
     connection.close()
     return {"message": "Media uploaded successfully.", "media": dict(row)}
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    pwd_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 100000).hex()
+    return f"{salt}${pwd_hash}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    if "$" not in stored_hash:
+        return False
+    salt, pwd_hash = stored_hash.split("$", 1)
+    test_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 100000).hex()
+    return hmac.compare_digest(test_hash, pwd_hash)
+
+
+def get_current_user(authorization: Optional[str] = Header(default=None)) -> dict:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authentication token required.")
+    token = authorization.removeprefix("Bearer ").strip()
+    connection = get_db_connection()
+    session = connection.execute(
+        "SELECT * FROM sessions WHERE token = ?", (token,)
+    ).fetchone()
+    if not session:
+        connection.close()
+        raise HTTPException(status_code=401, detail="Invalid or expired session.")
+
+    if datetime.now(timezone.utc).isoformat() > session["expires_at"]:
+        connection.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        connection.commit()
+        connection.close()
+        raise HTTPException(status_code=401, detail="Session expired.")
+
+    user = connection.execute(
+        "SELECT id, full_name, email, created_at FROM users WHERE id = ?", (session["user_id"],)
+    ).fetchone()
+    connection.close()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found.")
+    return dict(user)
+
+
+class RegisterRequest(BaseModel):
+    full_name: str
+    email: str
+    password: str
+    confirm_password: str
+
+
+@app.post("/api/auth/register")
+def register_user(payload: RegisterRequest):
+    full_name = payload.full_name.strip()
+    email = payload.email.strip().lower()
+    password = payload.password
+    confirm_password = payload.confirm_password
+
+    if not full_name or not email or not password:
+        raise HTTPException(status_code=400, detail="All fields are required.")
+    if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+        raise HTTPException(status_code=400, detail="Invalid email format.")
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long.")
+    if password != confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
+
+    connection = get_db_connection()
+    existing = connection.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+    if existing:
+        connection.close()
+        raise HTTPException(status_code=400, detail="Email is already registered.")
+
+    now = datetime.now(timezone.utc).isoformat()
+    pwd_hash = hash_password(password)
+    cursor = connection.execute(
+        "INSERT INTO users (full_name, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
+        (full_name, email, pwd_hash, now)
+    )
+    user_id = cursor.lastrowid
+
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() + 86400 * 7, timezone.utc).isoformat()
+    connection.execute(
+        "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+        (token, user_id, now, expires_at)
+    )
+    connection.commit()
+    connection.close()
+
+    return {
+        "user": {
+            "id": user_id,
+            "full_name": full_name,
+            "email": email
+        },
+        "token": token
+    }
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/api/auth/login")
+def login_user(payload: LoginRequest):
+    email = payload.email.strip().lower()
+    password = payload.password
+
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password are required.")
+
+    connection = get_db_connection()
+    user = connection.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+    if not user or not verify_password(password, user["password_hash"]):
+        connection.close()
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc).isoformat()
+    expires_at = datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() + 86400 * 7, timezone.utc).isoformat()
+    connection.execute(
+        "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+        (token, user["id"], now, expires_at)
+    )
+    connection.commit()
+    connection.close()
+
+    return {
+        "user": {
+            "id": user["id"],
+            "full_name": user["full_name"],
+            "email": user["email"]
+        },
+        "token": token
+    }
+
+
+@app.get("/api/auth/me")
+def get_me(user: dict = Depends(get_current_user)):
+    return {"user": user}
+
+
+@app.post("/api/auth/logout")
+def logout_user(authorization: Optional[str] = Header(default=None)):
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.removeprefix("Bearer ").strip()
+        connection = get_db_connection()
+        connection.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        connection.commit()
+        connection.close()
+    return {"success": True}
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+@app.post("/api/auth/forgot-password")
+def forgot_password(payload: ForgotPasswordRequest):
+    email = payload.email.strip().lower()
+    connection = get_db_connection()
+    user = connection.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+    if user:
+        reset_token = secrets.token_urlsafe(32)
+        expires_at = datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() + 3600, timezone.utc).isoformat()
+        connection.execute(
+            "UPDATE users SET reset_token = ?, reset_token_expires = ? WHERE id = ?",
+            (reset_token, expires_at, user["id"])
+        )
+        connection.commit()
+        connection.close()
+        return {"success": True, "message": "Password reset instructions sent.", "reset_token": reset_token}
+    connection.close()
+    return {"success": True, "message": "If the email exists, reset instructions have been sent."}
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+    confirm_password: str
+
+
+@app.post("/api/auth/reset-password")
+def reset_password(payload: ResetPasswordRequest):
+    if len(payload.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long.")
+    if payload.new_password != payload.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
+
+    connection = get_db_connection()
+    now = datetime.now(timezone.utc).isoformat()
+    user = connection.execute(
+        "SELECT id FROM users WHERE reset_token = ? AND reset_token_expires > ?",
+        (payload.token, now)
+    ).fetchone()
+    if not user:
+        connection.close()
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
+
+    pwd_hash = hash_password(payload.new_password)
+    connection.execute(
+        "UPDATE users SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL WHERE id = ?",
+        (pwd_hash, user["id"])
+    )
+    connection.commit()
+    connection.close()
+    return {"success": True, "message": "Password successfully updated."}
 
 
 app.mount(

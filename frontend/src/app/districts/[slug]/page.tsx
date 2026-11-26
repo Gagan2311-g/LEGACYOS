@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import DistrictIllustration from "../../components/DistrictIllustration";
+import DistrictKnowledge from "../../components/DistrictKnowledge";
 import { bengaluruDivisionDistrictNames, districts, districtSlug } from "../../districts";
 import { CommunityHeritagePage } from "../bagalkot/BagalkotCommunityPage";
 
@@ -63,6 +64,10 @@ export default async function DistrictPage({ params }: DistrictPageProps) {
             </div>
           </div>
         </div>
+        <DistrictKnowledge
+          districtId={districtSlug(district.name)}
+          districtName={district.name}
+        />
       </section>
     </main>
   );

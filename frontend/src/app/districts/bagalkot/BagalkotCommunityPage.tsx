@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import DistrictIllustration from "../../components/DistrictIllustration";
+import DistrictKnowledge from "../../components/DistrictKnowledge";
 import {
   bengaluruDivisionDistrictNames,
   districtSlug,
@@ -119,6 +120,12 @@ export function CommunityHeritagePage({
   const isBagalkot = collection === "bagalkot";
   const collectionName =
     districtName ?? (isBengaluruDivision ? "Bengaluru Division" : "Bagalkot");
+  const districtKnowledge = !isBengaluruDivision ? (
+    <DistrictKnowledge
+      districtId={isBagalkot ? "bagalkot" : districtSlug(collectionName)}
+      districtName={collectionName}
+    />
+  ) : null;
   const collectionApiPath = collection === "bengaluru-division"
     ? "/api/regions/bengaluru-division"
     : "/api/districts/bagalkot";
@@ -559,6 +566,8 @@ export function CommunityHeritagePage({
         </div>
       )}
 
+      {!data && districtKnowledge}
+
       {data && (
         <>
           <section className="bagalkot-hero">
@@ -621,6 +630,7 @@ export function CommunityHeritagePage({
           </section>
 
           <div className="bagalkot-content">
+            {districtKnowledge}
             <section className="bagalkot-stats" aria-label={`${collectionName} archive at a glance`}>
               <div className="bagalkot-stat">
                 <span className="bagalkot-stat-number">{data.records.length}</span>

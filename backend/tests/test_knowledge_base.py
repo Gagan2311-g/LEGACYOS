@@ -18,6 +18,7 @@ def _record(
     title: str,
     content: str,
     status: str = "verified",
+    category: str = "culture",
 ) -> dict[str, object]:
     return {
         "id": record_id,
@@ -25,7 +26,7 @@ def _record(
         "content": content,
         "region": region,
         "district": district,
-        "category": "culture",
+        "category": category,
         "source_url": "https://example.gov.in/heritage",
         "source_title": "District heritage profile",
         "source_org": "District Administration",
@@ -248,6 +249,100 @@ def test_chat_endpoint_returns_grounded_answer_and_citations(tmp_path, monkeypat
     index.close()
 
 
+def test_district_records_returns_verified_records_for_selected_district(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    corpus = tmp_path / "documents.jsonl"
+    bidar_record = _record(
+        "bidar-agriculture",
+        "uttara-karnataka",
+        "bidar",
+        "Bidar agriculture",
+        "District profile records pulses and cotton.",
+    )
+    bidar_record["category"] = "agriculture"
+    bidar_culture_record = _record(
+        "bidar-culture",
+        "uttara-karnataka",
+        "bidar",
+        "Bidar culture",
+        "District profile records Bidriware craft.",
+    )
+    bidar_culture_record["category"] = "culture"
+    unverified_record = _record(
+        "bidar-unverified",
+        "uttara-karnataka",
+        "bidar",
+        "Unverified Bidar claim",
+        "This claim still needs review.",
+        status="needs_review",
+    )
+    udupi_record = _record(
+        "udupi-culture",
+        "karavali",
+        "udupi",
+        "Udupi culture",
+        "District profile records coastal performance traditions.",
+    )
+    _write_corpus(
+        corpus,
+        [bidar_record, bidar_culture_record, unverified_record, udupi_record],
+    )
+    index = KnowledgeIndex(corpus, ":memory:", embedding_model_name="")
+    monkeypatch.setattr(knowledge_base, "INDEX", index)
+
+    response = TestClient(app).get("/api/districts/Bidar/records")
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["district"] == {"id": "bidar", "name": "Bidar"}
+    assert result["region"] == {
+        "id": "uttara-karnataka",
+        "name": "Uttara Karnataka",
+    }
+    assert [record["id"] for record in result["records"]] == [
+        "bidar-agriculture",
+        "bidar-culture",
+    ]
+    assert result["records"][0]["source_url"] == "https://example.gov.in/heritage"
+    index.close()
+
+
+def test_district_records_accepts_frontend_chikkaballapur_slug(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    corpus = tmp_path / "documents.jsonl"
+    _write_corpus(
+        corpus,
+        [
+            _record(
+                "chikkaballapura-agriculture",
+                "old-mysuru",
+                "chikkaballapura",
+                "Chikkaballapura agriculture",
+                "District records include ragi and maize cultivation.",
+            )
+        ],
+    )
+    index = KnowledgeIndex(corpus, ":memory:", embedding_model_name="")
+    monkeypatch.setattr(knowledge_base, "INDEX", index)
+
+    response = TestClient(app).get("/api/districts/chikkaballapur/records")
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["district"] == {
+        "id": "chikkaballapura",
+        "name": "Chikkaballapura",
+    }
+    assert [record["id"] for record in result["records"]] == [
+        "chikkaballapura-agriculture"
+    ]
+    index.close()
+
+
 def test_extractive_answer_is_brief_and_cited() -> None:
     documents = [
         {
@@ -308,6 +403,7 @@ def test_current_question_region_overrides_browsed_region_context(
                 "bidar",
                 "Bidar heritage",
                 "Bidar is known for its historical heritage and Bidriware craft.",
+                category="culture_history_geography",
             ),
             _record(
                 "kodagu-coffee",
@@ -479,6 +575,7 @@ def test_regional_crop_question_matches_source_topic_terms(tmp_path, monkeypatch
         "shivamogga",
         "Shivamogga horticulture crops",
         "The department lists arecanut and ginger cultivated in Malnad regions.",
+        category="agriculture",
     )
     crop_record["keywords"] = ["crops", "cultivation", "arecanut", "ginger"]
     _write_corpus(corpus, [crop_record])

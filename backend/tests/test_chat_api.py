@@ -1,85 +1,38 @@
-import sqlite3
+import json
 
 from fastapi.testclient import TestClient
 
 import app.knowledge_base as knowledge_base
 from app.main import app
 
+_TEST_INDEXES = {}
+
 
 def _create_index(path, records):
-    with sqlite3.connect(path) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE knowledge_documents (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                content TEXT NOT NULL,
-                region TEXT NOT NULL,
-                district TEXT,
-                category TEXT NOT NULL,
-                subcategory TEXT NOT NULL,
-                source_url TEXT NOT NULL,
-                source_title TEXT NOT NULL,
-                source_org TEXT NOT NULL,
-                publication_year TEXT,
-                reporting_year TEXT,
-                uncertainty TEXT NOT NULL,
-                verification_status TEXT NOT NULL
-            );
-            CREATE VIRTUAL TABLE knowledge_search USING fts5(
-                doc_id UNINDEXED, title, content, keywords,
-                region UNINDEXED, district UNINDEXED, category UNINDEXED
-            );
-            CREATE TABLE knowledge_embeddings (
-                doc_id TEXT PRIMARY KEY,
-                model_name TEXT NOT NULL,
-                record_hash TEXT NOT NULL,
-                vector_json TEXT NOT NULL
-            );
-            """
+    corpus_path = path.with_suffix(".jsonl")
+    enriched_records = []
+    for record in records:
+        enriched_records.append(
+            {
+                "accessed_at": "2024-01-01",
+                "extraction_date": "2024-01-01",
+                "uncertainty": "",
+                "additional_sources": [],
+                "language": "en",
+                "verification_status": "verified",
+                **record,
+            }
         )
-        for record in records:
-            connection.execute(
-                """
-                INSERT INTO knowledge_documents (
-                    id, title, content, region, district, category, subcategory,
-                    source_url, source_title, source_org, publication_year,
-                    reporting_year, uncertainty, verification_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record["id"],
-                    record["title"],
-                    record["content"],
-                    record["region"],
-                    record["district"],
-                    record["category"],
-                    record.get("subcategory", ""),
-                    record["source_url"],
-                    record["source_title"],
-                    record["source_org"],
-                    record.get("publication_year"),
-                    record.get("reporting_year"),
-                    record.get("uncertainty", ""),
-                    record.get("verification_status", "verified"),
-                ),
-            )
-            connection.execute(
-                """
-                INSERT INTO knowledge_search
-                    (doc_id, title, content, keywords, region, district, category)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record["id"],
-                    record["title"],
-                    record["content"],
-                    record.get("keywords", ""),
-                    record["region"],
-                    record["district"] or "",
-                    record["category"],
-                ),
-            )
+    corpus_path.write_text(
+        "\n".join(json.dumps(record) for record in enriched_records) + "\n",
+        encoding="utf-8",
+    )
+    index = knowledge_base.KnowledgeIndex(
+        corpus_path=corpus_path,
+        index_path=path,
+    )
+    index.ensure_indexed()
+    _TEST_INDEXES[path] = index
 
 
 def _record(record_id, region, district, title, content, category="agriculture"):
@@ -94,6 +47,8 @@ def _record(record_id, region, district, title, content, category="agriculture")
         "source_title": "Official district profile",
         "source_org": "District Administration",
         "keywords": f"{region} {district or ''} {category}",
+        "publication_year": None,
+        "reporting_year": None,
     }
 
 
@@ -124,7 +79,7 @@ def test_chat_uses_existing_fts_index_and_returns_citations(tmp_path, monkeypatc
             ),
         ],
     )
-    monkeypatch.setattr(knowledge_base, "INDEX_PATH", index_path)
+    monkeypatch.setattr(knowledge_base, "INDEX", _TEST_INDEXES[index_path])
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_MODEL", raising=False)
 
@@ -168,7 +123,7 @@ def test_district_name_filters_out_other_regions(tmp_path, monkeypatch):
             ),
         ],
     )
-    monkeypatch.setattr(knowledge_base, "INDEX_PATH", index_path)
+    monkeypatch.setattr(knowledge_base, "INDEX", _TEST_INDEXES[index_path])
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_MODEL", raising=False)
 
@@ -216,7 +171,7 @@ def test_region_name_does_not_narrow_to_same_named_district(tmp_path, monkeypatc
             ),
         ],
     )
-    monkeypatch.setattr(knowledge_base, "INDEX_PATH", index_path)
+    monkeypatch.setattr(knowledge_base, "INDEX", _TEST_INDEXES[index_path])
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_MODEL", raising=False)
 
@@ -270,7 +225,7 @@ def test_mysore_kingdom_query_uses_old_mysuru_region_not_mysuru_district(
             ),
         ],
     )
-    monkeypatch.setattr(knowledge_base, "INDEX_PATH", index_path)
+    monkeypatch.setattr(knowledge_base, "INDEX", _TEST_INDEXES[index_path])
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_MODEL", raising=False)
 
@@ -290,7 +245,6 @@ def test_mysore_kingdom_query_uses_old_mysuru_region_not_mysuru_district(
     result = response.json()
     assert {source["document_id"] for source in result["sources"]} == {
         "mandya-kingdom-history",
-        "mysuru-district-history",
     }
 
 
@@ -318,7 +272,7 @@ def test_multi_region_query_retrieves_from_each_requested_region(tmp_path, monke
         )
     )
     _create_index(index_path, records)
-    monkeypatch.setattr(knowledge_base, "INDEX_PATH", index_path)
+    monkeypatch.setattr(knowledge_base, "INDEX", _TEST_INDEXES[index_path])
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_MODEL", raising=False)
 
@@ -336,7 +290,7 @@ def test_multi_region_query_retrieves_from_each_requested_region(tmp_path, monke
 
     assert response.status_code == 200
     result = response.json()
-    assert {source["region"] for source in result["sources"]} == {
+    assert {source["region_id"] for source in result["sources"]} == {
         "old-mysuru",
         "karavali",
     }
@@ -365,7 +319,7 @@ def test_badami_alias_scopes_history_to_bagalkot(tmp_path, monkeypatch):
             ),
         ],
     )
-    monkeypatch.setattr(knowledge_base, "INDEX_PATH", index_path)
+    monkeypatch.setattr(knowledge_base, "INDEX", _TEST_INDEXES[index_path])
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_MODEL", raising=False)
 
@@ -403,7 +357,7 @@ def test_history_queries_include_heritage_records(tmp_path, monkeypatch):
             )
         ],
     )
-    monkeypatch.setattr(knowledge_base, "INDEX_PATH", index_path)
+    monkeypatch.setattr(knowledge_base, "INDEX", _TEST_INDEXES[index_path])
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_MODEL", raising=False)
 
@@ -452,7 +406,7 @@ def test_agricultural_and_historical_query_wording_matches_records(
             ),
         ],
     )
-    monkeypatch.setattr(knowledge_base, "INDEX_PATH", index_path)
+    monkeypatch.setattr(knowledge_base, "INDEX", _TEST_INDEXES[index_path])
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_MODEL", raising=False)
     client = TestClient(app)
@@ -500,7 +454,7 @@ def test_follow_up_reuses_recent_user_context(tmp_path, monkeypatch):
             )
         ],
     )
-    monkeypatch.setattr(knowledge_base, "INDEX_PATH", index_path)
+    monkeypatch.setattr(knowledge_base, "INDEX", _TEST_INDEXES[index_path])
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_MODEL", raising=False)
 
@@ -544,7 +498,7 @@ def test_follow_up_stays_with_previous_cited_documents(tmp_path, monkeypatch):
             ),
         ],
     )
-    monkeypatch.setattr(knowledge_base, "INDEX_PATH", index_path)
+    monkeypatch.setattr(knowledge_base, "INDEX", _TEST_INDEXES[index_path])
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_MODEL", raising=False)
 
@@ -584,7 +538,7 @@ def test_missing_current_statistics_are_not_fabricated(tmp_path, monkeypatch):
             )
         ],
     )
-    monkeypatch.setattr(knowledge_base, "INDEX_PATH", index_path)
+    monkeypatch.setattr(knowledge_base, "INDEX", _TEST_INDEXES[index_path])
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
     monkeypatch.setenv("GROQ_MODEL", "test-model")
     monkeypatch.setattr(knowledge_base, "urlopen", _unexpected_model_request)
@@ -623,7 +577,7 @@ def test_no_matching_records_returns_no_fake_sources(tmp_path, monkeypatch):
             )
         ],
     )
-    monkeypatch.setattr(knowledge_base, "INDEX_PATH", index_path)
+    monkeypatch.setattr(knowledge_base, "INDEX", _TEST_INDEXES[index_path])
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_MODEL", raising=False)
 
@@ -660,7 +614,7 @@ def test_knowledge_status_reports_embeddings_and_missing_ai_config(tmp_path, mon
             )
         ],
     )
-    monkeypatch.setattr(knowledge_base, "INDEX_PATH", index_path)
+    monkeypatch.setattr(knowledge_base, "INDEX", _TEST_INDEXES[index_path])
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_MODEL", raising=False)
 
